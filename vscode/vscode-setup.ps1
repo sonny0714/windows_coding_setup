@@ -166,6 +166,7 @@ $templateSettings = @{
         "gitDecoration.conflictingResourceForeground" = "#ff0066"
         "gitDecoration.submoduleResourceForeground" = "#6699ff"
     }
+    "explorer.autoReveal" = $false
     "explorer.confirmDragAndDrop" = $false
     "terminal.integrated.shellIntegration.enabled" = $false
     "vim.hlsearch" = $true
