@@ -174,9 +174,7 @@ $templateSettings = @{
         "<C-c>" = $false
         "<C-v>" = $false
         "<C-p>" = $true
-        "command" = "-workbench.action.quickOpen"
     }
-    "vim.visualModeKeyBindings" = @()
     "chat.agent.enabled" = $false
     "claudeCode.preferredLocation" = "panel"
     "github.copilot.enable" = @{
@@ -215,18 +213,7 @@ if (Save-Utf8NoBom $settingsPath $json) {
 # === keybindings.json 병합 ===
 Write-Host "`n--- keybindings.json ---" -ForegroundColor Cyan
 
-$templateBindings = @(
-    @{
-        key = "ctrl+p"
-        command = "selectPrevSuggestion"
-        when = "suggestWidgetMultipleSuggestions && suggestWidgetVisible && textInputFocus && vim.mode == 'Insert'"
-    },
-    @{
-        key = "ctrl+p"
-        command = "editor.action.triggerSuggest"
-        when = "!suggestWidgetVisible && textInputFocus && vim.active && vim.mode == 'Insert'"
-    }
-)
+$templateBindings = @()
 
 $keybindingsPath = "$settingsDir\keybindings.json"
 if (Test-Path $keybindingsPath) {
@@ -291,8 +278,8 @@ if ($codePath) {
             Write-Host "이미 설치됨" -ForegroundColor DarkGray
         } else {
             Write-Host "  $ext ... " -NoNewline
-            & $codePath --install-extension $ext --force 2>&1 | Out-Null
-            if ($?) {
+            & $codePath --install-extension $ext --force > $null 2>&1
+            if ($LASTEXITCODE -eq 0) {
                 Write-Host "설치 완료" -ForegroundColor Green
             } else {
                 Write-Host "실패" -ForegroundColor Red
