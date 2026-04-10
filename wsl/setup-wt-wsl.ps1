@@ -8,6 +8,7 @@
     아무 경로에서나 실행 가능합니다.
 #>
 
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
 function Clean-Jsonc {
@@ -196,7 +197,7 @@ $defaultOverrides = @{
     "cursorShape"              = "vintage"
     "suppressApplicationTitle" = $true
 }
-$fontOverride = @{ "size" = 9 }
+$fontOverride = @{ "face" = "Cascadia Mono"; "size" = 9 }
 
 # profiles 객체 자체가 없을 수 있음
 if (-not $settings.profiles) {
@@ -239,7 +240,7 @@ $customSchemes = @(
         brightCyan = "#61D6D6"; brightWhite = "#F2F2F2"
     },
     [PSCustomObject]@{
-        name = "mkris_color"; background = "#0C0C0C"; foreground = "#CCCCCC"
+        name = "sonny_color"; background = "#0C0C0C"; foreground = "#CCCCCC"
         cursorColor = "#FFFFFF"; selectionBackground = "#FFFFFF"
         black = "#0C0C0C"; red = "#C50F1F"; green = "#13A10E"; yellow = "#C19C00"
         blue = "#0080FF"; purple = "#881798"; cyan = "#3A96DD"; white = "#CCCCCC"
@@ -257,7 +258,7 @@ if ($settings.schemes) {
     $kept = @()
 }
 $settings.schemes = @($kept) + @($customSchemes)
-Write-Host "[OK] 컬러 스킴 병합 (Campbell modified, mkris_color)" -ForegroundColor Green
+Write-Host "[OK] 컬러 스킴 병합 (Campbell modified, sonny_color)" -ForegroundColor Green
 
 # ============================================================
 # 4. 액션 (기존 보존 + 커스텀 덮어쓰기)
