@@ -1,6 +1,6 @@
 
-# Worklog (per-user, machine-specific)
-md_files/worklog/users.yaml
+# md_files (per-user notes and worklog; not shared)
+md_files/
 
-# Worklog (per-user, machine-specific)
+# Worklog commands (per-user, machine-specific)
 .claude/commands/worklog/
