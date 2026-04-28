@@ -18,11 +18,10 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $dataDir = Join-Path $scriptDir "data"
 $globalsPath     = Join-Path $dataDir "globals.json"
 $defaultsPath    = Join-Path $dataDir "defaults.json"
-$schemesPath     = Join-Path $dataDir "schemes.json"
 $actionsPath     = Join-Path $dataDir "actions.json"
 $keybindingsPath = Join-Path $dataDir "keybindings.json"
 
-foreach ($p in @($globalsPath, $defaultsPath, $schemesPath, $actionsPath, $keybindingsPath)) {
+foreach ($p in @($globalsPath, $defaultsPath, $actionsPath, $keybindingsPath)) {
     if (-not (Test-Path $p)) {
         Write-Host "[ERROR] 데이터 파일 없음: $p" -ForegroundColor Red
         exit 1
@@ -247,22 +246,7 @@ if ($defaultsTemplate.PSObject.Properties["font"]) {
         $settings.profiles.defaults.font | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value -Force
     }
 }
-Write-Host "[OK] 프로필 기본값 병합 (vintage 커서, 폰트 9, 컬러스킴)" -ForegroundColor Green
-
-# ============================================================
-# 3. 커스텀 컬러 스킴 (동일 이름은 덮어쓰기, 나머지 보존)
-# ============================================================
-$customSchemes = @(Load-JsonFile $schemesPath)
-
-$customNames = $customSchemes | ForEach-Object { $_.name }
-
-if ($settings.schemes) {
-    $kept = @($settings.schemes | Where-Object { $_.name -notin $customNames })
-} else {
-    $kept = @()
-}
-$settings.schemes = @($kept) + @($customSchemes)
-Write-Host "[OK] 컬러 스킴 병합 (Campbell modified, sonny_color)" -ForegroundColor Green
+Write-Host "[OK] 프로필 기본값 병합 (vintage 커서, 폰트 9)" -ForegroundColor Green
 
 # ============================================================
 # 4. 액션 (기존 보존 + 커스텀 덮어쓰기)
@@ -316,7 +300,6 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "적용 항목:" -ForegroundColor White
 Write-Host "  - 커서: vintage / 폰트: 9pt" -ForegroundColor Gray
-Write-Host "  - 컬러 스킴: Campbell (modified)" -ForegroundColor Gray
 Write-Host "  - 키바인딩: alt+1~9 탭전환, alt+o 새탭" -ForegroundColor Gray
 Write-Host "  - 애니메이션 비활성화, URL감지 비활성화" -ForegroundColor Gray
 Write-Host ""
