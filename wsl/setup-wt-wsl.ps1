@@ -252,30 +252,49 @@ Write-Host "[OK] 프로필 기본값 병합 (vintage 커서, 폰트 9)" -Foregro
 # 4. 액션 (기존 보존 + 커스텀 덮어쓰기)
 # ============================================================
 $customActions = @(Load-JsonFile $actionsPath)
+$customActionIds = @($customActions | ForEach-Object { $_.id })
 
-$customActionIds = $customActions | ForEach-Object { $_.id }
-
+$mergedActions = [System.Collections.ArrayList]::new()
 if ($settings.actions) {
-    $keptActions = @($settings.actions | Where-Object { $_.id -notin $customActionIds })
-} else {
-    $keptActions = @()
+    foreach ($a in @($settings.actions)) {
+        # 깨진 래퍼({value:[...], Count:N}) 평탄화
+        if ($a.PSObject.Properties["value"] -and ($a.value -is [System.Collections.IEnumerable])) {
+            foreach ($inner in $a.value) {
+                if ($inner.id -notin $customActionIds) { [void]$mergedActions.Add($inner) }
+            }
+        } elseif ($a.id -notin $customActionIds) {
+            [void]$mergedActions.Add($a)
+        }
+    }
 }
-$settings.actions = @($keptActions) + @($customActions)
+foreach ($a in $customActions) { [void]$mergedActions.Add($a) }
+
+if ($settings.PSObject.Properties["actions"]) { $settings.PSObject.Properties.Remove("actions") }
+$settings | Add-Member -NotePropertyName "actions" -NotePropertyValue ([object[]]$mergedActions.ToArray()) -Force
 Write-Host "[OK] 액션 병합 (기존 액션 보존 + 커스텀 추가/덮어쓰기)" -ForegroundColor Green
 
 # ============================================================
 # 5. 키바인딩 (기존 보존 + 커스텀 덮어쓰기)
 # ============================================================
 $customKeybindings = @(Load-JsonFile $keybindingsPath)
+$customKbIds = @($customKeybindings | ForEach-Object { $_.id })
 
-$customKbIds = $customKeybindings | ForEach-Object { $_.id }
-
+$mergedKb = [System.Collections.ArrayList]::new()
 if ($settings.keybindings) {
-    $keptKb = @($settings.keybindings | Where-Object { $_.id -notin $customKbIds })
-} else {
-    $keptKb = @()
+    foreach ($k in @($settings.keybindings)) {
+        if ($k.PSObject.Properties["value"] -and ($k.value -is [System.Collections.IEnumerable])) {
+            foreach ($inner in $k.value) {
+                if ($inner.id -notin $customKbIds) { [void]$mergedKb.Add($inner) }
+            }
+        } elseif ($k.id -notin $customKbIds) {
+            [void]$mergedKb.Add($k)
+        }
+    }
 }
-$settings.keybindings = @($keptKb) + @($customKeybindings)
+foreach ($k in $customKeybindings) { [void]$mergedKb.Add($k) }
+
+if ($settings.PSObject.Properties["keybindings"]) { $settings.PSObject.Properties.Remove("keybindings") }
+$settings | Add-Member -NotePropertyName "keybindings" -NotePropertyValue ([object[]]$mergedKb.ToArray()) -Force
 Write-Host "[OK] 키바인딩 병합 (기존 보존 + 커스텀 추가/덮어쓰기)" -ForegroundColor Green
 
 # ============================================================

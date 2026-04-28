@@ -279,7 +279,7 @@ foreach ($tb in $templateBindings) {
     }
 }
 
-$json = ConvertTo-Json @($existingBindings) -Depth 5
+$json = ConvertTo-Json -InputObject ([object[]]$existingBindings.ToArray()) -Depth 5
 $json = Restore-JsonUnicode $json
 if (Save-Utf8NoBom $keybindingsPath $json) {
     Write-Host "[OK] keybindings.json 저장 완료" -ForegroundColor Green
