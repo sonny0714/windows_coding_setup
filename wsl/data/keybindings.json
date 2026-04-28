@@ -1,0 +1,16 @@
+[
+    { "id": "User.copy.644BA8F2",       "keys": "ctrl+c" },
+    { "id": "User.paste",               "keys": "ctrl+v" },
+    { "id": "User.find",                "keys": "ctrl+shift+f" },
+    { "id": "User.newTab.5DEADB41",     "keys": "alt+o" },
+    { "id": "User.splitPane.A6751878",  "keys": "alt+shift+d" },
+    { "id": "User.switchToTab.D3F0B923","keys": "alt+1" },
+    { "id": "User.switchToTab.2A0DA8E0","keys": "alt+2" },
+    { "id": "User.switchToTab.87C324ED","keys": "alt+3" },
+    { "id": "User.switchToTab.6CD791B", "keys": "alt+4" },
+    { "id": "User.switchToTab.F747588A","keys": "alt+5" },
+    { "id": "User.switchToTab.75247157","keys": "alt+6" },
+    { "id": "User.switchToTab.787314EB","keys": "alt+7" },
+    { "id": "User.switchToTab.D7681B66","keys": "alt+8" },
+    { "id": "User.switchToTab.ED268D78","keys": "alt+9" }
+]

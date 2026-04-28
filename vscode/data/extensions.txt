@@ -1,0 +1,7 @@
+anthropic.claude-code
+llvm-vs-code-extensions.vscode-clangd
+ms-python.vscode-pylance
+ms-vscode-remote.remote-ssh
+ms-vscode-remote.remote-ssh-edit
+ms-vscode.remote-explorer
+vscodevim.vim

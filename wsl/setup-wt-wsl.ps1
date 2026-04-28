@@ -11,6 +11,36 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
+# ============================================================
+# 데이터 파일 경로
+# ============================================================
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$dataDir = Join-Path $scriptDir "data"
+$globalsPath     = Join-Path $dataDir "globals.json"
+$defaultsPath    = Join-Path $dataDir "defaults.json"
+$schemesPath     = Join-Path $dataDir "schemes.json"
+$actionsPath     = Join-Path $dataDir "actions.json"
+$keybindingsPath = Join-Path $dataDir "keybindings.json"
+
+foreach ($p in @($globalsPath, $defaultsPath, $schemesPath, $actionsPath, $keybindingsPath)) {
+    if (-not (Test-Path $p)) {
+        Write-Host "[ERROR] 데이터 파일 없음: $p" -ForegroundColor Red
+        exit 1
+    }
+}
+
+function Load-JsonFile {
+    param([string]$Path)
+    $raw = Get-Content $Path -Raw -Encoding UTF8
+    $clean = Clean-Jsonc $raw
+    try {
+        return $clean | ConvertFrom-Json
+    } catch {
+        Write-Host "[ERROR] $Path 파싱 실패: $_" -ForegroundColor Red
+        exit 1
+    }
+}
+
 function Clean-Jsonc {
     param([string]$Text)
     # JSONC → 표준 JSON 변환
@@ -177,27 +207,17 @@ try {
 # ============================================================
 # 1. 전역 설정 (없으면 추가, 있으면 덮어쓰기)
 # ============================================================
-$globalOverrides = @{
-    "copyFormatting"          = "none"
-    "copyOnSelect"            = $false
-    "disableAnimations"       = $true
-    "experimental.detectURLs" = $false
-}
+$globalOverrides = Load-JsonFile $globalsPath
 
-foreach ($key in $globalOverrides.Keys) {
-    $settings | Add-Member -NotePropertyName $key -NotePropertyValue $globalOverrides[$key] -Force
+foreach ($prop in $globalOverrides.PSObject.Properties) {
+    $settings | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value -Force
 }
 Write-Host "[OK] 전역 설정 병합 (copyFormatting, disableAnimations 등)" -ForegroundColor Green
 
 # ============================================================
 # 2. 프로필 기본값 (defaults) - 기존 값 보존 + 덮어쓰기
 # ============================================================
-$defaultOverrides = @{
-    "colorScheme"              = "Campbell (modified)"
-    "cursorShape"              = "vintage"
-    "suppressApplicationTitle" = $true
-}
-$fontOverride = @{ "face" = "Cascadia Mono"; "size" = 9 }
+$defaultsTemplate = Load-JsonFile $defaultsPath
 
 # profiles 객체 자체가 없을 수 있음
 if (-not $settings.profiles) {
@@ -212,43 +232,27 @@ if (-not $settings.profiles.defaults) {
     $settings.profiles | Add-Member -NotePropertyName "defaults" -NotePropertyValue ([PSCustomObject]@{}) -Force
 }
 
-# 기존 defaults 위에 덮어쓰기
-foreach ($key in $defaultOverrides.Keys) {
-    $settings.profiles.defaults | Add-Member -NotePropertyName $key -NotePropertyValue $defaultOverrides[$key] -Force
+# 기존 defaults 위에 덮어쓰기 (font는 별도로 nested 병합)
+foreach ($prop in $defaultsTemplate.PSObject.Properties) {
+    if ($prop.Name -eq "font") { continue }
+    $settings.profiles.defaults | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value -Force
 }
 
 # font 객체도 기존 보존 + 병합
-if (-not $settings.profiles.defaults.font) {
-    $settings.profiles.defaults | Add-Member -NotePropertyName "font" -NotePropertyValue ([PSCustomObject]@{}) -Force
-}
-foreach ($key in $fontOverride.Keys) {
-    $settings.profiles.defaults.font | Add-Member -NotePropertyName $key -NotePropertyValue $fontOverride[$key] -Force
+if ($defaultsTemplate.PSObject.Properties["font"]) {
+    if (-not $settings.profiles.defaults.font) {
+        $settings.profiles.defaults | Add-Member -NotePropertyName "font" -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    foreach ($prop in $defaultsTemplate.font.PSObject.Properties) {
+        $settings.profiles.defaults.font | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value -Force
+    }
 }
 Write-Host "[OK] 프로필 기본값 병합 (vintage 커서, 폰트 9, 컬러스킴)" -ForegroundColor Green
 
 # ============================================================
 # 3. 커스텀 컬러 스킴 (동일 이름은 덮어쓰기, 나머지 보존)
 # ============================================================
-$customSchemes = @(
-    [PSCustomObject]@{
-        name = "Campbell (modified)"; background = "#000000"; foreground = "#CCCCCC"
-        cursorColor = "#FFFFFF"; selectionBackground = "#FFFFFF"
-        black = "#000000"; red = "#C50F1F"; green = "#13A10E"; yellow = "#C19C00"
-        blue = "#0037DA"; purple = "#881798"; cyan = "#3A96DD"; white = "#CCCCCC"
-        brightBlack = "#767676"; brightRed = "#E74856"; brightGreen = "#16C60C"
-        brightYellow = "#F9F1A5"; brightBlue = "#3B78FF"; brightPurple = "#B4009E"
-        brightCyan = "#61D6D6"; brightWhite = "#F2F2F2"
-    },
-    [PSCustomObject]@{
-        name = "sonny_color"; background = "#0C0C0C"; foreground = "#CCCCCC"
-        cursorColor = "#FFFFFF"; selectionBackground = "#FFFFFF"
-        black = "#0C0C0C"; red = "#C50F1F"; green = "#13A10E"; yellow = "#C19C00"
-        blue = "#0080FF"; purple = "#881798"; cyan = "#3A96DD"; white = "#CCCCCC"
-        brightBlack = "#767676"; brightRed = "#E74856"; brightGreen = "#16C60C"
-        brightYellow = "#F9F1A5"; brightBlue = "#3B78FF"; brightPurple = "#B4009E"
-        brightCyan = "#61D6D6"; brightWhite = "#F2F2F2"
-    }
-)
+$customSchemes = @(Load-JsonFile $schemesPath)
 
 $customNames = $customSchemes | ForEach-Object { $_.name }
 
@@ -263,22 +267,7 @@ Write-Host "[OK] 컬러 스킴 병합 (Campbell modified, sonny_color)" -Foregro
 # ============================================================
 # 4. 액션 (기존 보존 + 커스텀 덮어쓰기)
 # ============================================================
-$customActions = @(
-    [PSCustomObject]@{ id = "User.splitPane.A6751878";   command = [PSCustomObject]@{ action = "splitPane"; split = "auto"; splitMode = "duplicate" } }
-    [PSCustomObject]@{ id = "User.paste";                command = "paste" }
-    [PSCustomObject]@{ id = "User.newTab.5DEADB41";      command = [PSCustomObject]@{ action = "newTab" } }
-    [PSCustomObject]@{ id = "User.copy.644BA8F2";        command = [PSCustomObject]@{ action = "copy"; singleLine = $false } }
-    [PSCustomObject]@{ id = "User.find";                 command = "find" }
-    [PSCustomObject]@{ id = "User.switchToTab.D3F0B923"; command = [PSCustomObject]@{ action = "switchToTab"; index = 0 } }
-    [PSCustomObject]@{ id = "User.switchToTab.2A0DA8E0"; command = [PSCustomObject]@{ action = "switchToTab"; index = 1 } }
-    [PSCustomObject]@{ id = "User.switchToTab.87C324ED"; command = [PSCustomObject]@{ action = "switchToTab"; index = 2 } }
-    [PSCustomObject]@{ id = "User.switchToTab.6CD791B";  command = [PSCustomObject]@{ action = "switchToTab"; index = 3 } }
-    [PSCustomObject]@{ id = "User.switchToTab.F747588A"; command = [PSCustomObject]@{ action = "switchToTab"; index = 4 } }
-    [PSCustomObject]@{ id = "User.switchToTab.75247157"; command = [PSCustomObject]@{ action = "switchToTab"; index = 5 } }
-    [PSCustomObject]@{ id = "User.switchToTab.787314EB"; command = [PSCustomObject]@{ action = "switchToTab"; index = 6 } }
-    [PSCustomObject]@{ id = "User.switchToTab.D7681B66"; command = [PSCustomObject]@{ action = "switchToTab"; index = 7 } }
-    [PSCustomObject]@{ id = "User.switchToTab.ED268D78"; command = [PSCustomObject]@{ action = "switchToTab"; index = 8 } }
-)
+$customActions = @(Load-JsonFile $actionsPath)
 
 $customActionIds = $customActions | ForEach-Object { $_.id }
 
@@ -293,22 +282,7 @@ Write-Host "[OK] 액션 병합 (기존 액션 보존 + 커스텀 추가/덮어�
 # ============================================================
 # 5. 키바인딩 (기존 보존 + 커스텀 덮어쓰기)
 # ============================================================
-$customKeybindings = @(
-    [PSCustomObject]@{ id = "User.copy.644BA8F2";         keys = "ctrl+c" }
-    [PSCustomObject]@{ id = "User.paste";                  keys = "ctrl+v" }
-    [PSCustomObject]@{ id = "User.find";                   keys = "ctrl+shift+f" }
-    [PSCustomObject]@{ id = "User.newTab.5DEADB41";        keys = "alt+o" }
-    [PSCustomObject]@{ id = "User.splitPane.A6751878";     keys = "alt+shift+d" }
-    [PSCustomObject]@{ id = "User.switchToTab.D3F0B923";   keys = "alt+1" }
-    [PSCustomObject]@{ id = "User.switchToTab.2A0DA8E0";   keys = "alt+2" }
-    [PSCustomObject]@{ id = "User.switchToTab.87C324ED";   keys = "alt+3" }
-    [PSCustomObject]@{ id = "User.switchToTab.6CD791B";    keys = "alt+4" }
-    [PSCustomObject]@{ id = "User.switchToTab.F747588A";   keys = "alt+5" }
-    [PSCustomObject]@{ id = "User.switchToTab.75247157";   keys = "alt+6" }
-    [PSCustomObject]@{ id = "User.switchToTab.787314EB";   keys = "alt+7" }
-    [PSCustomObject]@{ id = "User.switchToTab.D7681B66";   keys = "alt+8" }
-    [PSCustomObject]@{ id = "User.switchToTab.ED268D78";   keys = "alt+9" }
-)
+$customKeybindings = @(Load-JsonFile $keybindingsPath)
 
 $customKbIds = $customKeybindings | ForEach-Object { $_.id }
 

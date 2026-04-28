@@ -1,0 +1,16 @@
+[
+    { "id": "User.splitPane.A6751878",   "command": { "action": "splitPane", "split": "auto", "splitMode": "duplicate" } },
+    { "id": "User.paste",                "command": "paste" },
+    { "id": "User.newTab.5DEADB41",      "command": { "action": "newTab" } },
+    { "id": "User.copy.644BA8F2",        "command": { "action": "copy", "singleLine": false } },
+    { "id": "User.find",                 "command": "find" },
+    { "id": "User.switchToTab.D3F0B923", "command": { "action": "switchToTab", "index": 0 } },
+    { "id": "User.switchToTab.2A0DA8E0", "command": { "action": "switchToTab", "index": 1 } },
+    { "id": "User.switchToTab.87C324ED", "command": { "action": "switchToTab", "index": 2 } },
+    { "id": "User.switchToTab.6CD791B",  "command": { "action": "switchToTab", "index": 3 } },
+    { "id": "User.switchToTab.F747588A", "command": { "action": "switchToTab", "index": 4 } },
+    { "id": "User.switchToTab.75247157", "command": { "action": "switchToTab", "index": 5 } },
+    { "id": "User.switchToTab.787314EB", "command": { "action": "switchToTab", "index": 6 } },
+    { "id": "User.switchToTab.D7681B66", "command": { "action": "switchToTab", "index": 7 } },
+    { "id": "User.switchToTab.ED268D78", "command": { "action": "switchToTab", "index": 8 } }
+]

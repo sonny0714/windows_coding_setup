@@ -5,6 +5,30 @@
 
 Write-Host "`n=== VSCode 설정 셋업 시작 ===" -ForegroundColor Cyan
 
+# --- 데이터 파일 경로 ---
+# 호출 방식별 fallback: -File 실행($PSScriptRoot), 일반 호출($MyInvocation), .bat의 인라인 호출($env:SCRIPT_DIR)
+if ($PSScriptRoot) {
+    $scriptDir = $PSScriptRoot
+} elseif ($MyInvocation.MyCommand.Path) {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+} elseif ($env:SCRIPT_DIR) {
+    $scriptDir = $env:SCRIPT_DIR.TrimEnd('\')
+} else {
+    Write-Host "[오류] 스크립트 디렉토리를 확인할 수 없습니다." -ForegroundColor Red
+    exit 1
+}
+$dataDir = Join-Path $scriptDir "data"
+$settingsTemplatePath = Join-Path $dataDir "settings.json"
+$keybindingsTemplatePath = Join-Path $dataDir "keybindings.json"
+$extensionsListPath = Join-Path $dataDir "extensions.txt"
+
+foreach ($p in @($settingsTemplatePath, $keybindingsTemplatePath, $extensionsListPath)) {
+    if (!(Test-Path $p)) {
+        Write-Host "[오류] 데이터 파일 없음: $p" -ForegroundColor Red
+        exit 1
+    }
+}
+
 # --- VSCode 실행 경로 자동 탐색 ---
 $codePath = $null
 $codePath = Get-Command code -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
@@ -92,31 +116,26 @@ function Remove-JsonComments {
     return $result.ToString()
 }
 
-# === Hashtable을 재귀적으로 PSCustomObject로 변환 ===
-function ConvertTo-PSObject {
-    param($obj)
-    if ($obj -is [hashtable]) {
-        $pso = New-Object PSCustomObject
-        foreach ($key in $obj.Keys) {
-            $pso | Add-Member -NotePropertyName $key -NotePropertyValue (ConvertTo-PSObject $obj[$key])
-        }
-        return $pso
-    }
-    elseif ($obj -is [System.Collections.IList]) {
-        return @($obj | ForEach-Object { ConvertTo-PSObject $_ })
-    }
-    return $obj
-}
-
 # === JSON 병합 함수 (스크립트 항목은 덮어씀, 기존 고유 항목은 유지) ===
+# 케이스 불일치(예: "Editor.fontSize" vs "editor.fontSize")는 템플릿의 정상 케이스로 정정.
+# 사용자의 값은 보존하고 키 이름만 정정 후 일반 병합 로직 진행 (nested 객체 데이터 보존).
 function Merge-Json {
     param($existing, $template)
     foreach ($prop in $template.PSObject.Properties) {
         $key = $prop.Name
         $val = $prop.Value
-        if ($existing.PSObject.Properties[$key]) {
-            if ($val -is [PSCustomObject] -and $existing.$key -is [PSCustomObject]) {
-                Merge-Json $existing.$key $val
+        $existingProp = $existing.PSObject.Properties[$key]
+        if ($existingProp) {
+            if ($existingProp.Name -cne $key) {
+                $oldName = $existingProp.Name
+                $oldValue = $existingProp.Value
+                $existing.PSObject.Properties.Remove($oldName)
+                $existing | Add-Member -NotePropertyName $key -NotePropertyValue $oldValue
+                Write-Host "  [케이스 수정] '$oldName' -> '$key'" -ForegroundColor Yellow
+                $existingProp = $existing.PSObject.Properties[$key]
+            }
+            if ($val -is [PSCustomObject] -and $existingProp.Value -is [PSCustomObject]) {
+                Merge-Json $existingProp.Value $val
             } else {
                 $existing.$key = $val
                 Write-Host "  [덮어씀] $key" -ForegroundColor Yellow
@@ -143,49 +162,42 @@ function Save-Utf8NoBom {
     }
 }
 
+# === PS 5.1 ConvertTo-Json의 과도한 \uXXXX 이스케이프 복원 ===
+# PS 5.1은 < > & ' 및 모든 비-ASCII를 \uXXXX로 출력함.
+# 리터럴 백슬래시(\\)는 보존, 제어문자(0x00-0x1F)와 orphan surrogate도 보존.
+# 정규식: (?<!\\)((?:\\\\)*)\\u(...) — 앞쪽 백슬래시 짝을 캡처해 보존하면서 진짜 \u 이스케이프만 매칭.
+function Restore-JsonUnicode {
+    param([string]$json)
+    # 1) Surrogate pair (이모지 등 BMP 외 문자) 먼저 처리
+    $json = [regex]::Replace($json, '(?<!\\)((?:\\\\)*)\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})', {
+        param($m)
+        $hi = [Convert]::ToInt32($m.Groups[2].Value, 16)
+        $lo = [Convert]::ToInt32($m.Groups[3].Value, 16)
+        $cp = ((($hi - 0xD800) * 0x400) + ($lo - 0xDC00)) + 0x10000
+        return $m.Groups[1].Value + [char]::ConvertFromUtf32($cp)
+    })
+    # 2) BMP 단일 \uXXXX → 실제 문자. 제어문자/orphan surrogate는 보존.
+    $json = [regex]::Replace($json, '(?<!\\)((?:\\\\)*)\\u([0-9a-fA-F]{4})', {
+        param($m)
+        $code = [Convert]::ToInt32($m.Groups[2].Value, 16)
+        if ($code -lt 0x20) { return $m.Value }
+        if ($code -ge 0xD800 -and $code -le 0xDFFF) { return $m.Value }
+        return $m.Groups[1].Value + [string][char]$code
+    })
+    return $json
+}
+
 # === settings.json 병합 ===
 Write-Host "`n--- settings.json ---" -ForegroundColor Cyan
 
-$templateSettings = @{
-    "editor.fontSize" = 12
-    "editor.minimap.enabled" = $false
-    "editor.wordBasedSuggestions" = "allDocuments"
-    "editor.suggest.filterGraceful" = $false
-    "editor.acceptSuggestionOnCommitCharacter" = $false
-    "editor.quickSuggestions" = @{ "other" = $false; "comments" = $false; "strings" = $false }
-    "files.autoSave" = "afterDelay"
-    "files.autoSaveDelay" = 600000
-    "workbench.activityBar.location" = "top"
-    "workbench.colorTheme" = "Dark+"
-    "workbench.colorCustomizations" = @{
-        "gitDecoration.modifiedResourceForeground" = "#ffa500"
-        "gitDecoration.untrackedResourceForeground" = "#00cc66"
-        "gitDecoration.addedResourceForeground" = "#00cc66"
-        "gitDecoration.deletedResourceForeground" = "#ff3333"
-        "gitDecoration.ignoredResourceForeground" = "#999999"
-        "gitDecoration.conflictingResourceForeground" = "#ff0066"
-        "gitDecoration.submoduleResourceForeground" = "#6699ff"
-    }
-    "explorer.autoReveal" = $false
-    "explorer.confirmDragAndDrop" = $false
-    "terminal.integrated.shellIntegration.enabled" = $false
-    "vim.hlsearch" = $true
-    "editor.experimentalEditContextEnabled" = $false
-    "vim.handleKeys" = @{
-        "<C-c>" = $false
-        "<C-v>" = $false
-        "<C-p>" = $true
-    }
-    "chat.agent.enabled" = $false
-    "claudeCode.preferredLocation" = "panel"
-    "github.copilot.enable" = @{
-        "*" = $false
-        "plaintext" = $false
-        "markdown" = $false
-        "scminput" = $false
-    }
+$templateRaw = Get-Content $settingsTemplatePath -Raw -Encoding UTF8
+$templateClean = Remove-JsonComments $templateRaw
+try {
+    $template = $templateClean | ConvertFrom-Json
+} catch {
+    Write-Host "[오류] $settingsTemplatePath 파싱 실패: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
 }
-$template = ConvertTo-PSObject $templateSettings
 
 $settingsPath = "$settingsDir\settings.json"
 if (Test-Path $settingsPath) {
@@ -207,6 +219,7 @@ if (Test-Path $settingsPath) {
 }
 
 $json = $existing | ConvertTo-Json -Depth 10
+$json = Restore-JsonUnicode $json
 if (Save-Utf8NoBom $settingsPath $json) {
     Write-Host "[OK] settings.json 저장 완료" -ForegroundColor Green
 }
@@ -214,7 +227,21 @@ if (Save-Utf8NoBom $settingsPath $json) {
 # === keybindings.json 병합 ===
 Write-Host "`n--- keybindings.json ---" -ForegroundColor Cyan
 
-$templateBindings = @()
+$kbTemplateRaw = Get-Content $keybindingsTemplatePath -Raw -Encoding UTF8
+$kbTemplateClean = Remove-JsonComments $kbTemplateRaw
+try {
+    $parsedTemplateBindings = $kbTemplateClean | ConvertFrom-Json
+    if ($null -eq $parsedTemplateBindings) {
+        $templateBindings = @()
+    } elseif ($parsedTemplateBindings -is [array]) {
+        $templateBindings = $parsedTemplateBindings
+    } else {
+        $templateBindings = @($parsedTemplateBindings)
+    }
+} catch {
+    Write-Host "[오류] $keybindingsTemplatePath 파싱 실패: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
 
 $keybindingsPath = "$settingsDir\keybindings.json"
 if (Test-Path $keybindingsPath) {
@@ -247,12 +274,13 @@ foreach ($tb in $templateBindings) {
         }
     }
     if (!$found) {
-        $existingBindings.Add([PSCustomObject]$tb) | Out-Null
+        $existingBindings.Add($tb) | Out-Null
         Write-Host "  [추가] $($tb.key) -> $($tb.command)" -ForegroundColor Green
     }
 }
 
 $json = ConvertTo-Json @($existingBindings) -Depth 5
+$json = Restore-JsonUnicode $json
 if (Save-Utf8NoBom $keybindingsPath $json) {
     Write-Host "[OK] keybindings.json 저장 완료" -ForegroundColor Green
 }
@@ -261,15 +289,9 @@ if (Save-Utf8NoBom $keybindingsPath $json) {
 if ($codePath) {
     Write-Host "`n=== 확장 프로그램 설치 ===" -ForegroundColor Cyan
 
-    $extensions = @(
-        "anthropic.claude-code"
-        "llvm-vs-code-extensions.vscode-clangd"
-        "ms-python.vscode-pylance"
-        "ms-vscode-remote.remote-ssh"
-        "ms-vscode-remote.remote-ssh-edit"
-        "ms-vscode.remote-explorer"
-        "vscodevim.vim"
-    )
+    $extensions = @(Get-Content $extensionsListPath -Encoding UTF8 |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -and -not $_.StartsWith('#') })
 
     $installed = & $codePath --list-extensions 2>$null
 
