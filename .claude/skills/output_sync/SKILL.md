@@ -16,12 +16,12 @@ allowed-tools: Bash(*)
 ### Usage
 ```
  Usage:
-   ./output_sync.sh -a collect -p <project> -t all       — collect save from all active servers
+   ./output_sync.sh -a collect -p <project> -t all       — collect runs from all active servers
    ./output_sync.sh -a c -p <project> -t all             — short for collect
-   ./output_sync.sh -a distribute -p <project> -t all    — distribute load to all active servers
+   ./output_sync.sh -a distribute -p <project> -t all    — distribute models to all active servers
    ./output_sync.sh -a d -p <project> -t all             — short for distribute
    ./output_sync.sh -a c -p <project> -t <server>        — collect from specific server
-   ./output_sync.sh -a d -p <project> -t <server> -f     — distribute to server, clear load first
+   ./output_sync.sh -a d -p <project> -t <server> -f     — distribute to server, clear models first
 ```
 
 ### Options
@@ -30,7 +30,7 @@ allowed-tools: Bash(*)
    -a <mode>    collect (c) or distribute (d) — required
    -p <project> target project — required
    -t <server>  target server — required ("all" = all server_active_status=true servers)
-   -f           distribute only: clear remote load/ before transfer
+   -f           distribute only: clear remote models/ before transfer
    -h           show help
 ```
 

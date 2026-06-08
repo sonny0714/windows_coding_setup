@@ -3,31 +3,32 @@
 #  Output Sync — collect/distribute experiment outputs between servers
 #
 #  Usage:
-#    ./output_sync.sh -a collect -p <project> -t all       — collect save from all active servers
+#    ./output_sync.sh -a collect -p <project> -t all       — collect runs from all active servers
 #    ./output_sync.sh -a c -p <project> -t all             — short for collect
-#    ./output_sync.sh -a distribute -p <project> -t all    — distribute load to all active servers
+#    ./output_sync.sh -a distribute -p <project> -t all    — distribute models to all active servers
 #    ./output_sync.sh -a d -p <project> -t all             — short for distribute
 #    ./output_sync.sh -a c -p <project> -t <server>        — collect from specific server
-#    ./output_sync.sh -a d -p <project> -t <server> -f     — distribute to server, clear load first
+#    ./output_sync.sh -a d -p <project> -t <server> -f     — distribute to server, clear models first
 #
 #  Options:
 #    -a <mode>    collect (c) or distribute (d) — required
 #    -p <project> target project — required
 #    -t <server>  target server — required ("all" = all server_active_status=true servers)
-#    -f           distribute only: clear remote load/ before transfer
+#    -f           distribute only: clear remote models/ before transfer
 #    -h           show help
 #
-#  Collect (remote → sync_hub):
+#  Collect (remote → sync_hub): raw training runs live ABOVE the repo at
+#    artifacts/runs/{project}/ (sibling of the project dir), not in-repo.
 #    Per server (parallel):
-#      1. rsync remote:{project}/outputs/save/ → local save_staging_{server}/
-#      2. mv staging files → save/
+#      1. rsync remote:artifacts/runs/{project}/ → local artifacts/runs_staging/{project}_{server}/
+#      2. mv staging files → artifacts/runs/{project}/
 #      3. rm staging
 #
-#  Distribute (sync_hub → remote):
+#  Distribute (sync_hub → remote): promoted models in-repo at outputs/models/.
 #    Per server (parallel):
-#      1. (-f) rm remote load/*
-#      2. rsync local:{project}/outputs/load/ → remote load_staging/
-#      3. mv staging files → load/
+#      1. (-f) rm remote outputs/models/*
+#      2. rsync local:{project}/outputs/models/ → remote outputs/models_staging/
+#      3. mv staging files → outputs/models/
 #      4. rm staging
 #
 #  Requires:
@@ -155,11 +156,13 @@ _collect_server() {
             continue
         fi
 
-        local remote_save_docker="${DOCKER_VOL}/${proj}/outputs/save"
-        local local_save_docker="${DOCKER_VOL}/${proj}/outputs/save"
-        local local_staging_docker="${DOCKER_VOL}/${proj}/outputs/save_staging_${name}"
-        local remote_save_host="${remote_vol}/${proj}/outputs/save"
-        local local_staging_host="${LOCAL_VOL}/${proj}/outputs/save_staging_${name}"
+        # raw training output now lives ABOVE the repo under artifacts/runs/{proj}
+        # (sibling of the project dir), not in-repo outputs/save (2026-06-08 restructure).
+        local remote_save_docker="${DOCKER_VOL}/artifacts/runs/${proj}"
+        local local_save_docker="${DOCKER_VOL}/artifacts/runs/${proj}"
+        local local_staging_docker="${DOCKER_VOL}/artifacts/runs_staging/${proj}_${name}"
+        local remote_save_host="${remote_vol}/artifacts/runs/${proj}"
+        local local_staging_host="${LOCAL_VOL}/artifacts/runs_staging/${proj}_${name}"
 
         # Check if remote save has files
         local has_files
@@ -175,8 +178,8 @@ _collect_server() {
         # chown to host user so host-level rsync can write
         local host_uid; host_uid=$(id -u)
         local host_gid; host_gid=$(id -g)
-        local outputs_docker="${DOCKER_VOL}/${proj}/outputs"
-        docker exec ${BASE_CONTAINER} bash -c "mkdir -p ${local_staging_docker} ${local_save_docker} && chown ${host_uid}:${host_gid} ${outputs_docker} ${local_staging_docker} ${local_save_docker}"
+        local runs_docker="${DOCKER_VOL}/artifacts/runs"
+        docker exec ${BASE_CONTAINER} bash -c "mkdir -p ${local_staging_docker} ${local_save_docker} && chown ${host_uid}:${host_gid} ${runs_docker} ${local_staging_docker} ${local_save_docker}"
 
         # rsync from remote to local staging (host level)
         rsync -az --omit-dir-times -e "ssh ${ssh_opts}" "${user}@${ip}:${remote_save_host}/" "${local_staging_host}/"
@@ -194,7 +197,7 @@ _collect_server() {
 }
 
 # ============================================
-#  Distribute: local load → remote load
+#  Distribute: local models → remote models
 # ============================================
 _distribute_server() {
     local name="$1"
@@ -221,26 +224,26 @@ _distribute_server() {
             continue
         fi
 
-        local local_load_docker="${DOCKER_VOL}/${proj}/outputs/load"
-        local remote_load_docker="${DOCKER_VOL}/${proj}/outputs/load"
-        local remote_staging_docker="${DOCKER_VOL}/${proj}/outputs/load_staging"
-        local local_load_host="${LOCAL_VOL}/${proj}/outputs/load"
-        local remote_staging_host="${remote_vol}/${proj}/outputs/load_staging"
+        local local_model_docker="${DOCKER_VOL}/${proj}/outputs/models"
+        local remote_model_docker="${DOCKER_VOL}/${proj}/outputs/models"
+        local remote_staging_docker="${DOCKER_VOL}/${proj}/outputs/models_staging"
+        local local_model_host="${LOCAL_VOL}/${proj}/outputs/models"
+        local remote_staging_host="${remote_vol}/${proj}/outputs/models_staging"
 
-        # Check if local load has files
+        # Check if local models has files
         local has_files
-        has_files=$(docker exec ${BASE_CONTAINER} bash -c "ls -A ${local_load_docker}/ 2>/dev/null | head -1")
+        has_files=$(docker exec ${BASE_CONTAINER} bash -c "ls -A ${local_model_docker}/ 2>/dev/null | head -1")
         if [ -z "${has_files}" ]; then
-            echo "  [${name}/${proj}] load empty, skipped"
+            echo "  [${name}/${proj}] models empty, skipped"
             continue
         fi
 
         echo "  [${name}/${proj}] distributing..."
 
-        # If force, clear remote load
+        # If force, clear remote models
         if [ "${FORCE}" = true ]; then
-            ssh ${ssh_opts} ${user}@${ip} "docker exec ${BASE_CONTAINER} bash -c 'rm -rf ${remote_load_docker}/*'" 2>/dev/null
-            echo "  [${name}/${proj}] cleared remote load"
+            ssh ${ssh_opts} ${user}@${ip} "docker exec ${BASE_CONTAINER} bash -c 'rm -rf ${remote_model_docker}/*'" 2>/dev/null
+            echo "  [${name}/${proj}] cleared remote models"
         fi
 
         # Prepare remote directories via docker
@@ -250,14 +253,14 @@ _distribute_server() {
         local remote_gid
         remote_gid=$(ssh ${ssh_opts} ${user}@${ip} "id -g" 2>/dev/null)
         local remote_outputs_docker="${DOCKER_VOL}/${proj}/outputs"
-        ssh ${ssh_opts} ${user}@${ip} "docker exec ${BASE_CONTAINER} bash -c 'mkdir -p ${remote_staging_docker} ${remote_load_docker} && chown ${remote_uid}:${remote_gid} ${remote_outputs_docker} ${remote_staging_docker} ${remote_load_docker}'" 2>/dev/null
+        ssh ${ssh_opts} ${user}@${ip} "docker exec ${BASE_CONTAINER} bash -c 'mkdir -p ${remote_staging_docker} ${remote_model_docker} && chown ${remote_uid}:${remote_gid} ${remote_outputs_docker} ${remote_staging_docker} ${remote_model_docker}'" 2>/dev/null
 
         # rsync from local to remote staging (host level)
-        rsync -az --omit-dir-times -e "ssh ${ssh_opts}" "${local_load_host}/" "${user}@${ip}:${remote_staging_host}/"
+        rsync -az --omit-dir-times -e "ssh ${ssh_opts}" "${local_model_host}/" "${user}@${ip}:${remote_staging_host}/"
 
         if [ $? -eq 0 ]; then
-            # mv staging files → load, then rm staging dir
-            ssh ${ssh_opts} ${user}@${ip} "docker exec ${BASE_CONTAINER} bash -c 'mv -f ${remote_staging_docker}/* ${remote_staging_docker}/.[!.]* ${remote_load_docker}/ 2>/dev/null; rm -rf ${remote_staging_docker}'"
+            # mv staging files → models, then rm staging dir
+            ssh ${ssh_opts} ${user}@${ip} "docker exec ${BASE_CONTAINER} bash -c 'mv -f ${remote_staging_docker}/* ${remote_staging_docker}/.[!.]* ${remote_model_docker}/ 2>/dev/null; rm -rf ${remote_staging_docker}'"
             echo "  [${name}/${proj}] done"
         else
             echo "  [${name}/${proj}] ERROR: rsync failed"

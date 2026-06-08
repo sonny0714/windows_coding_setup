@@ -89,15 +89,59 @@ def main():
     git_projects = list(git_projects_raw.keys())
     git_user_allow_push = {}
     git_owner = {}
+    wandb_key = {}
+    wandb_entity = {}
     for p, pconf in git_projects_raw.items():
         pconf = pconf or {}
         git_user_allow_push[p] = pconf.get("git_user_allow_push", True)
         git_owner[p] = pconf.get("git_owner", "")
+        wandb_key[p] = pconf.get("wandb_api_key", "")
+        wandb_entity[p] = pconf.get("wandb_entity", "")
     print(f"GIT_PROJECT_LIST={bash_list(git_projects)}")
     for p in git_projects:
         val = "true" if git_user_allow_push.get(p, True) else "false"
         print(f"GIT_USER_ALLOW_PUSH_{p}={val}")
         print(f"GIT_OWNER_{p}={bash_quote(git_owner[p])}")
+        # Per-project wandb creds → container env via docker.sh (persistent login).
+        if wandb_key[p]:
+            print(f"WANDB_API_KEY_{p}={bash_quote(wandb_key[p])}")
+        if wandb_entity[p]:
+            print(f"WANDB_ENTITY_{p}={bash_quote(wandb_entity[p])}")
+
+    # ── Submodules (keyed by parent_sub) ──
+    # users.yaml stores [path] as the full relative path (already includes the
+    # submodule name — yaml_to_bash.py / worklog_setup.sh resolve it), so pass
+    # it through verbatim. Mirrors the SUBMODULE_* vars in configuration.sh.
+    all_submodules = {}
+    project_submodules = {}
+    for p, pconf in git_projects_raw.items():
+        pconf = pconf or {}
+        subs = pconf.get("submodules", {}) or {}
+        if not subs:
+            continue
+        project_submodules[p] = []
+        for sname, sconf in subs.items():
+            sconf = sconf or {}
+            if not sconf.get("enabled", True):
+                continue
+            all_submodules[(p, sname)] = {
+                "parent": p,
+                "path": sconf.get("path", ""),
+                "git_owner": sconf.get("git_owner", ""),
+                "git_user_allow_push": sconf.get("git_user_allow_push", False),
+            }
+            project_submodules[p].append(sname)
+        if not project_submodules[p]:
+            del project_submodules[p]
+    if all_submodules:
+        combined_keys = [f"{p}_{s}" for (p, s) in all_submodules]
+        print(f"SUBMODULE_LIST={bash_list(combined_keys)}")
+        for p, subs in project_submodules.items():
+            print(f'GIT_SUBMODULES_{p}={bash_quote(" ".join(subs))}')
+        for (p, sname), sconf in all_submodules.items():
+            print(bash_assoc_array(f"SUBMODULE_{p}_{sname}", sconf))
+    else:
+        print("SUBMODULE_LIST=()")
 
     # ── Docker images ──
     docker_images = user.get("docker_images", {})
