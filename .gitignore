@@ -3,4 +3,6 @@
 md_files/
 
 # Worklog commands (per-user, machine-specific)
-.claude/commands/worklog/
+
+# Worklog (per-user, machine-specific)
+md_files/users/users.yaml

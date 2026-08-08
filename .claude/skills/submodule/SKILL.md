@@ -2,14 +2,16 @@
 description: "Submodule — backup/restore + convert between tracked files and git submodule"
 disable-model-invocation: false
 user-invocable: true
+argument-hint: [action] [project] [submodule]
+allowed-tools: Bash(*)
 ---
 
-`.claude/skills/submodule/scripts/submodule.sh`을 실행합니다.
+Run `.claude/skills/submodule/scripts/submodule.sh`.
 
-## 중요: 실행 전 반드시 사용자에게 옵션을 확인하세요
+## Important: always confirm the options with the user before running
 
-**절대로 옵션을 임의로 결정하여 바로 실행하지 마세요.**
-아래 옵션 정보를 참고하여, 사용자에게 필요한 옵션 값을 질문한 후 실행하세요.
+**Never decide the options on your own and run immediately.**
+Refer to the option information below, ask the user for the option values needed, then run.
 
 ### Usage
 ```
@@ -28,8 +30,8 @@ user-invocable: true
    -h              show help
 ```
 
-## 실행 절차
+## Procedure
 
-1. `md_files/worklog/users.yaml`에서 현재 서버 정보를 확인합니다.
-2. 사용자에게 필요한 옵션 값을 질문합니다.
-3. 사용자가 확인한 옵션으로 `.claude/skills/submodule/scripts/submodule.sh`을 실행합니다.
+1. Check the current server info in `md_files/users/users.yaml`.
+2. Ask the user for the option values needed.
+3. Run `.claude/skills/submodule/scripts/submodule.sh` with the options the user confirmed.

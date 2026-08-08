@@ -6,12 +6,12 @@ argument-hint: [action] [project] [submodule?] [server] [message?]
 allowed-tools: Bash(*)
 ---
 
-`.claude/skills/git/scripts/git.sh`을 실행합니다.
+Run `.claude/skills/git/scripts/git.sh`.
 
-## 중요: 실행 전 반드시 사용자에게 옵션을 확인하세요
+## Important: always confirm the options with the user before running
 
-**절대로 옵션을 임의로 결정하여 바로 실행하지 마세요.**
-아래 옵션 정보를 참고하여, 사용자에게 필요한 옵션 값을 질문한 후 실행하세요.
+**Never decide the options on your own and run immediately.**
+Refer to the option information below, ask the user for the option values needed, then run.
 
 ### Usage
 ```
@@ -21,11 +21,17 @@ allowed-tools: Bash(*)
    ./git.sh -a clone -p <project> -t all     -f
    ./git.sh -a clone -p <project> -t <server> -f
    ./git.sh -a push_all -p <project> -m "msg"
+   ./git.sh -a push_all -p <project> -m "msg" -b <branch>
 
  Usage (single submodule of a project — same actions, just add -s):
    ./git.sh -a pull  -p <project> -s <submodule> -t all
    ./git.sh -a clone -p <project> -s <submodule> -t <server> -f
-   ./git.sh -a push_all -p <project> -s <submodule> -m "msg"
+   ./git.sh -a push_all -p <project> -s <submodule> -m "msg" [-b <branch>]
+                            ^ pushes the submodule AND records the new pointer in
+                              the parent (add gitlink + commit + push). Add -N to
+                              skip that and leave the parent on the old sha —
+                              which means the submodule change never enters the
+                              parent's history.
 ```
 
 ### Options
@@ -38,12 +44,19 @@ allowed-tools: Bash(*)
                    Without -s the action targets the parent project itself.
    -t <server>     target server — required for pull/clone ("all" = common rule)
    -m <message>    commit message for push_all — required
+   -b <branch>     push_all only: push HEAD to this remote branch (git push
+                   <url> HEAD:<branch>). Omit → git push <url> (current branch).
+   -N              push_all -s only: do NOT bump the parent's gitlink afterwards.
+                   The bump is the default because leaving the parent on the old
+                   sha is the mistake, not the intent; it is safe by default
+                   because it runs only after the push succeeded and re-checks
+                   that the sha is on a remote branch.
    -f              clone only: explicit acknowledgement that clone is destructive
    -h              show help
 ```
 
-## 실행 절차
+## Procedure
 
-1. `md_files/worklog/users.yaml`에서 현재 서버 정보를 확인합니다.
-2. 사용자에게 필요한 옵션 값을 질문합니다.
-3. 사용자가 확인한 옵션으로 `.claude/skills/git/scripts/git.sh`을 실행합니다.
+1. Check the current server info in `md_files/users/users.yaml`.
+2. Ask the user for the option values needed.
+3. Run `.claude/skills/git/scripts/git.sh` with the options the user confirmed.

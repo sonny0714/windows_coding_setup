@@ -88,16 +88,87 @@ def main():
     git_projects_raw = user.get("git_projects", {})
     git_projects = list(git_projects_raw.keys())
     git_user_allow_push = {}
+    git_server_allow_push = {}
+    push_server_union = []
     git_owner = {}
+    wandb_key = {}
+    wandb_entity = {}
     for p, pconf in git_projects_raw.items():
         pconf = pconf or {}
         git_user_allow_push[p] = pconf.get("git_user_allow_push", True)
+        # Project-scoped push servers (setup.sh writes each project's explicit
+        # list into users.yaml) — no server-level allow_push.
+        push_servers = pconf.get("git_server_allow_push", []) or []
+        if isinstance(push_servers, str):
+            push_servers = [push_servers]
+        git_server_allow_push[p] = [str(s) for s in push_servers]
+        for s in git_server_allow_push[p]:
+            if s not in push_server_union:
+                push_server_union.append(s)
         git_owner[p] = pconf.get("git_owner", "")
+        wandb_key[p] = pconf.get("wandb_api_key", "")
+        wandb_entity[p] = pconf.get("wandb_entity", "")
     print(f"GIT_PROJECT_LIST={bash_list(git_projects)}")
     for p in git_projects:
         val = "true" if git_user_allow_push.get(p, True) else "false"
         print(f"GIT_USER_ALLOW_PUSH_{p}={val}")
+        print(f'GIT_SERVER_ALLOW_PUSH_{p}={bash_quote(" ".join(git_server_allow_push[p]))}')
         print(f"GIT_OWNER_{p}={bash_quote(git_owner[p])}")
+        # Per-project wandb creds → container env via docker.sh (persistent login).
+        if wandb_key[p]:
+            print(f"WANDB_API_KEY_{p}={bash_quote(wandb_key[p])}")
+        if wandb_entity[p]:
+            print(f"WANDB_ENTITY_{p}={bash_quote(wandb_entity[p])}")
+    print(f'GIT_SERVER_ALLOW_PUSH_UNION={bash_quote(" ".join(push_server_union))}')
+
+    # ── Submodules (keyed by parent_sub) ──
+    # users.yaml stores [path] as the full relative path (already includes the
+    # submodule name — yaml_to_bash.py / setup.sh resolve it), so pass
+    # it through verbatim. Mirrors the SUBMODULE_* vars in configuration.sh.
+    all_submodules = {}
+    project_submodules = {}
+    disabled_submodules = {}
+    for p, pconf in git_projects_raw.items():
+        pconf = pconf or {}
+        subs = pconf.get("submodules", {}) or {}
+        if not subs:
+            continue
+        project_submodules[p] = []
+        disabled_submodules[p] = []
+        for sname, sconf in subs.items():
+            sconf = sconf or {}
+            # Disabled submodules are still emitted: .gitmodules may keep the
+            # gitlink registered, so the deinit path (and its safety probe) must
+            # stay reachable after the flag flips.
+            enabled = bool(sconf.get("enabled", True))
+            all_submodules[(p, sname)] = {
+                "parent": p,
+                "path": sconf.get("path", ""),
+                "git_owner": sconf.get("git_owner", ""),
+                "git_user_allow_push": sconf.get("git_user_allow_push", False),
+                "active_pull_if_allow_push_server": sconf.get(
+                    "active_pull_if_allow_push_server", False
+                ),
+                "enabled": enabled,
+            }
+            (project_submodules if enabled else disabled_submodules)[p].append(sname)
+        if not project_submodules[p]:
+            del project_submodules[p]
+        if not disabled_submodules[p]:
+            del disabled_submodules[p]
+    if all_submodules:
+        combined_keys = [f"{p}_{s}" for (p, s) in all_submodules]
+        print(f"SUBMODULE_LIST={bash_list(combined_keys)}")
+        # GIT_SUBMODULES_<p> stays enabled-only so every existing consumer keeps
+        # its meaning; disabled ones get their own list.
+        for p, subs in project_submodules.items():
+            print(f'GIT_SUBMODULES_{p}={bash_quote(" ".join(subs))}')
+        for p, subs in disabled_submodules.items():
+            print(f'GIT_SUBMODULES_DISABLED_{p}={bash_quote(" ".join(subs))}')
+        for (p, sname), sconf in all_submodules.items():
+            print(bash_assoc_array(f"SUBMODULE_{p}_{sname}", sconf))
+    else:
+        print("SUBMODULE_LIST=()")
 
     # ── Docker images ──
     docker_images = user.get("docker_images", {})

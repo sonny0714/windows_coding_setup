@@ -1,7 +1,34 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)"
+      "Bash(*)",
+      "Skill(git)",
+      "Skill(git:*)",
+      "Skill(docker)",
+      "Skill(docker:*)",
+      "Skill(output_sync)",
+      "Skill(output_sync:*)",
+      "Skill(submodule)",
+      "Skill(submodule:*)",
+      "Skill(artifact_sync)",
+      "Skill(artifact_sync:*)",
+      "Skill(monitor)",
+      "Skill(monitor:*)",
+      "Skill(run_scan)",
+      "Skill(run_scan:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/reminder_refactoring.sh"
+          }
+        ]
+      }
     ]
   }
 }

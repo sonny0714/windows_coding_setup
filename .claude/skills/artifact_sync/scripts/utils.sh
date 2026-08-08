@@ -1,10 +1,21 @@
 #!/bin/bash
 # ============================================
-#  Exec utilities — shared functions for exec/ scripts
+#  Exec utilities — shared functions for core/<topic>/<topic>.sh scripts
 # ============================================
 
 # Derived from configuration.sh
 BASE_CONTAINER="base_${PROJECT_USER}"
+
+# Path of the docker topic script, resolved from this file's own location so
+# callers need not know the layout. Two layouts source this file:
+#   alias    — core/common/utils.sh  → sibling topic dir core/docker/docker.sh
+#   skill    — .claude/skills/<name>/scripts/utils.sh → same dir (docker skill only)
+_UTILS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${_UTILS_DIR}/../docker/docker.sh" ]; then
+    DOCKER_SCRIPT="${_UTILS_DIR}/../docker/docker.sh"
+else
+    DOCKER_SCRIPT="${_UTILS_DIR}/docker.sh"
+fi
 
 # Print a "===" banner with [name] ip:port for the given server.
 # Usage: print_target_banner <server_name>
@@ -35,7 +46,10 @@ print_banner_line() {
 build_ssh_opts() {
     local name="$1"
     declare -n _srv="SERVER_${name}"
-    local opts=""
+    # LogLevel=ERROR silences the "Warning: Permanently added ..." host-key noise
+    # so run_on_server can pass real remote stderr through instead of dumping the
+    # whole stream to /dev/null (which also hid every genuine failure message).
+    local opts="-o LogLevel=ERROR"
     [ "${_srv[port]}" != "22" ] && [ -n "${_srv[port]}" ] && opts="${opts} -p ${_srv[port]}"
     [ -n "${_srv[ssh_key]}" ] && opts="${opts} -i ${_srv[ssh_key]}"
     unset -n _srv
@@ -57,21 +71,26 @@ run_on_server() {
     if is_local_server "$name"; then
         bash -c "${cmd}"
     else
-        ssh ${opts} ${user}@${ip} "${cmd}" 2>/dev/null
+        # Remote stderr flows through (matching the local branch) — a failing
+        # remote command must say WHY on the caller's terminal. A probe that wants
+        # silence suppresses at ITS call site, not here for everyone.
+        ssh ${opts} ${user}@${ip} "${cmd}"
     fi
 }
 
 # Ensure base container is running on server
 # If stopped → docker start, if not found → docker.sh -i base -t <server>
-# Usage: ensure_base "$name" "$SCRIPT_DIR"
+# Usage: ensure_base "$name"
 ensure_base() {
     local name="$1"
-    local script_dir="$2"
     local cname="base_${PROJECT_USER}"
 
-    # Check if base is running
+    # Check if base is running. tail -1 because a remote bashrc that prints on a
+    # non-interactive shell (an alias hook warning, a submodule notice) lands in
+    # this capture, and an exact "yes" compare would then read a healthy
+    # container as missing.
     local is_running
-    is_running=$(run_on_server "$name" "docker ps --format '{{.Names}}' | grep -qx '${cname}' && echo yes")
+    is_running=$(run_on_server "$name" "docker ps --format '{{.Names}}' | grep -qx '${cname}' && echo yes" | tail -1)
     [ "${is_running}" = "yes" ] && return 0
 
     # Try start (stopped container) or create (no container)
@@ -80,11 +99,11 @@ ensure_base() {
     echo "${result}"
 
     if echo "${result}" | grep -q "not found"; then
-        "${script_dir}/docker.sh" -i base -t "${name}"
+        "${DOCKER_SCRIPT}" -i base -t "${name}"
     fi
 
     # Verify
-    is_running=$(run_on_server "$name" "docker ps --format '{{.Names}}' | grep -qx '${cname}' && echo yes")
+    is_running=$(run_on_server "$name" "docker ps --format '{{.Names}}' | grep -qx '${cname}' && echo yes" | tail -1)
     if [ "${is_running}" != "yes" ]; then
         echo "  [ERROR] ${cname} container failed to start on ${name}"
         return 1
@@ -106,12 +125,12 @@ ensure_ssh_agent() {
 
 # ============================================
 #  Target / available-list helpers
-#  Shared across exec/*.sh — single source of truth for "what is a valid
+#  Shared across core/*/<topic>.sh — single source of truth for "what is a valid
 #  target?" and "is this project/image available on this server?"
 #
 #  Defaults (from configuration_default.yaml) are merged into GIT_PROJECT_LIST,
 #  DOCKER_LIST, and every server's git_available_list / docker_available_list
-#  by yaml_to_bash.py and worklog_setup.sh, so the helpers below treat all
+#  by yaml_to_bash.py and setup.sh, so the helpers below treat all
 #  entries uniformly — no special-case "default" handling.
 # ============================================
 
@@ -135,6 +154,39 @@ is_known_docker_image() {
     return 1
 }
 
+# Map `uname -m` (or a docker platform string) → docker arch key. Variants
+# (arm64/v8, arm/v7) collapse to the base arch: amd64-vs-arm64 is the only split
+# our servers actually have. Mirrored by platform_arch() in core/config/yaml_to_bash.py
+# and the _my_arch case in bash_alias/docker.sh — the three must not drift.
+# Usage: docker_arch <uname-m|platform>
+docker_arch() {
+    local _a="${1#linux/}"
+    _a="${_a%%/*}"
+    case "${_a}" in
+        x86_64|amd64)          echo "amd64" ;;
+        aarch64|arm64|armv8*)  echo "arm64" ;;
+        armv7*|armv6*|armhf)   echo "arm" ;;
+        i386|i686)             echo "386" ;;
+        *)                     echo "${_a}" ;;
+    esac
+}
+
+# Resolve which build of an image a given arch must use, into RESOLVED_IMAGE /
+# RESOLVED_OPTIONS / RESOLVED_EXEC / RESOLVED_PLATFORMS. docker_images.<img>.
+# platforms is flattened to [image_<arch>] by yaml_to_bash.py (and carried into
+# users.yaml by setup.sh), so an empty RESOLVED_IMAGE means the image
+# declares no build for this arch and must not run here — running it anyway
+# dies at `docker run` with "exec format error".
+# Usage: resolve_docker_image <image> <arch>
+resolve_docker_image() {
+    declare -n _ri="DOCKER_${1}"
+    RESOLVED_IMAGE="${_ri[image_${2}]:-}"
+    RESOLVED_OPTIONS="${_ri[options_${2}]:-${_ri[options]:-}}"
+    RESOLVED_EXEC="${_ri[exec_${2}]:-${_ri[exec]:-/bin/bash}}"
+    RESOLVED_PLATFORMS="${_ri[platforms]:-}"
+    unset -n _ri
+}
+
 # Emit a server's git available list (already defaults-merged).
 # Usage: server_git_available <server_name>
 server_git_available() {
@@ -142,6 +194,31 @@ server_git_available() {
     local _p
     for _p in ${_srv[git_available_list]}; do echo "$_p"; done
     unset -n _srv
+}
+
+# Repo-local git config that makes submodules safe by default. Applied at clone
+# time and re-applied idempotently by init.sh, because these are per-clone (a new
+# server's fresh clone would otherwise have none of them).
+#   push.recurseSubmodules=on-demand — pushing the parent also pushes any submodule
+#     commit the parent now points at. Without it a parent can publish a gitlink to
+#     a sha no other server can fetch, and their `git submodule update` fails.
+#   submodule.recurse=true           — pull/checkout move the submodules too.
+#   status.submoduleSummary=true     — `git status` says "1 commit ahead" instead of
+#     a bare ` M <path>` that reads like an ordinary file edit.
+# A repo with no submodules is untouched (the settings would be inert anyway).
+# Mirrored in bash_alias/git.sh `_git_repo_config` (bash_alias sources only
+# configuration.sh, not this file) — the two must not drift.
+# Usage: apply_repo_git_config <repo_dir> [label]
+apply_repo_git_config() {
+    local _dir="$1" _label="${2:-$1}"
+    [ -d "${_dir}/.git" ] || [ -f "${_dir}/.git" ] || return 0
+    [ -f "${_dir}/.gitmodules" ] || return 0
+    # Idempotent early-exit: already configured → silent (this runs on every pull)
+    [ "$(git -C "${_dir}" config push.recurseSubmodules 2>/dev/null)" = "on-demand" ] && return 0
+    git -C "${_dir}" config push.recurseSubmodules on-demand
+    git -C "${_dir}" config submodule.recurse true
+    git -C "${_dir}" config status.submoduleSummary true
+    echo "  [git-config] ${_label} — submodule safety config applied"
 }
 
 # Emit a server's docker available list (already defaults-merged).
@@ -246,8 +323,46 @@ is_local_server() {
     [ -n "${DETECTED_SERVER}" ] && [ "${DETECTED_SERVER}" = "${1}" ]
 }
 
+# ── Push-server membership (project-scoped) ─────────────────────────
+# Push permission is project-scoped: a server is a push server FOR A PROJECT
+# iff it appears in that project's git_server_allow_push list
+# (GIT_SERVER_ALLOW_PUSH_<project>, emitted by yaml_to_bash.py / exec.py).
+# There is no server-level allow_push key anymore.
+# Usage: is_push_server <server> <project>
+is_push_server() {
+    local _list_var="GIT_SERVER_ALLOW_PUSH_${2}"
+    case " ${!_list_var:-} " in
+        *" ${1} "*) return 0 ;;
+    esac
+    return 1
+}
+
+# True if the server is a push server for ANY project — for protective filters
+# that have no project context (docker -t all -f, init.sh force gates).
+# Usage: is_push_server_any <server>
+is_push_server_any() {
+    case " ${GIT_SERVER_ALLOW_PUSH_UNION:-} " in
+        *" ${1} "*) return 0 ;;
+    esac
+    return 1
+}
+
+# True if the server is a push server for any project that maps this image in
+# PROJECT_DOCKER_<p> — decides where an image's _test container belongs.
+# Usage: is_push_server_for_image <server> <image>
+is_push_server_for_image() {
+    local _p _pd_var
+    for _p in "${GIT_PROJECT_LIST[@]}"; do
+        _pd_var="PROJECT_DOCKER_${_p}"
+        case " ${!_pd_var:-} " in
+            *" ${2} "*) is_push_server "${1}" "${_p}" && return 0 ;;
+        esac
+    done
+    return 1
+}
+
 # Resolve target servers from a -t argument, applying the common selection rule
-# and an optional allow_push filter.
+# and an optional push-server filter.
 #
 # Common rule (only applied when target == "all"):
 #   - server_active_status=true is required for every candidate
@@ -259,18 +374,31 @@ is_local_server() {
 #
 # Filter:
 #   ""        — no extra filter
-#   "no_push" — drop servers with allow_push=true
+#   "no_push" — drop push servers. With <project> given, drops servers in that
+#               project's git_server_allow_push; without it, drops servers that
+#               are a push server for ANY project (union).
 #
 # For an explicit single-server target, the common rule is NOT applied (the
-# user is being explicit), but server_active_status and the allow_push filter
+# user is being explicit), but server_active_status and the push filter
 # are still enforced. Unknown / inactive / filtered single targets cause an
 # error/skip message on stderr.
 #
-# Usage: resolve_target_servers <target> [no_push]
+# Usage: resolve_target_servers <target> [no_push [project]]
 # Output: server names, one per line, on stdout
 resolve_target_servers() {
     local _target="$1"
     local _filter="${2:-}"
+    local _filter_proj="${3:-}"
+
+    # Shared push-filter probe: true → the server must be dropped.
+    _rts_push_filtered() {
+        [ "${_filter}" != "no_push" ] && return 1
+        if [ -n "${_filter_proj}" ]; then
+            is_push_server "${1}" "${_filter_proj}"
+        else
+            is_push_server_any "${1}"
+        fi
+    }
 
     # ── Single explicit server ──
     if [ "${_target}" != "all" ]; then
@@ -284,8 +412,8 @@ resolve_target_servers() {
             unset -n _srv
             return 0
         fi
-        if [ "${_filter}" = "no_push" ] && [ "${_srv[allow_push]}" = "true" ]; then
-            echo "[SKIP] ${_target} — allow_push=true (excluded by filter)" >&2
+        if _rts_push_filtered "${_target}"; then
+            echo "[SKIP] ${_target} — push server${_filter_proj:+ for '${_filter_proj}'} (excluded by filter)" >&2
             unset -n _srv
             return 0
         fi
@@ -318,7 +446,7 @@ resolve_target_servers() {
         fi
 
         # Filter
-        if [ "${_filter}" = "no_push" ] && [ "${_srv[allow_push]}" = "true" ]; then
+        if _rts_push_filtered "${_name}"; then
             unset -n _srv; continue
         fi
 
@@ -351,6 +479,15 @@ validate_config() {
 
         local _is_remote="${_ref[server_remote]}"
         local _is_active="${_ref[server_active_status]}"
+
+        # internal_ip is compared literally against `hostname -I` (no wildcard
+        # octets — a trailing zero here is a real address), so a full host IP is
+        # the only useful form.
+        local _int_ip="${_ref[internal_ip]}"
+        if [ -n "${_int_ip}" ] && ! [[ "${_int_ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            echo "[configuration.sh] ERROR: SERVER_${_name}[internal_ip]='${_int_ip}' is not in plain IPv4 form (x.x.x.x)" >&2
+            _has_error=true
+        fi
 
         if [ "${_is_remote}" = "true" ]; then
             # Remote server → IP is authoritative (used for SSH and identity
@@ -397,9 +534,22 @@ validate_config() {
         if [ ${#_ref[@]} -eq 0 ]; then
             echo "[configuration.sh] ERROR: DOCKER_${_name} is not defined" >&2
             _has_error=true
+        elif [ -z "${_ref[platforms]:-}" ]; then
+            # No platforms → resolve_docker_image returns an empty image for every
+            # arch and docker.sh skips the image everywhere, silently.
+            echo "[configuration.sh] ERROR: DOCKER_${_name}[platforms] is empty — declare docker_images.${_name}.platforms with at least one platform" >&2
+            _has_error=true
+        else
+            for _plat in ${_ref[platforms]}; do
+                if [ -z "${_ref[image_$(docker_arch "${_plat}")]:-}" ]; then
+                    echo "[configuration.sh] ERROR: DOCKER_${_name} declares platform '${_plat}' but has no image for it" >&2
+                    _has_error=true
+                fi
+            done
         fi
     done
     unset -n _ref
+    unset _plat
 
     # Per-server docker_available_list must reference defined images.
     for _name in "${SERVER_LIST[@]}"; do
@@ -514,12 +664,34 @@ detect_local_server() {
     DETECTED_PORT="${_ssh_port:-22}"
     DETECTED_SERVER=""
 
-    # ── Pass 1: hostname match for server_remote=false servers ──
+    # ── Pass 0: machine_id exact match — the only fleet-stable identity ──
+    # /etc/machine-id is unique per machine and survives DHCP leases, interface
+    # changes and NAT. Hostname (Pass 1) is not unique on cloned images (every
+    # Pi answers "raspberrypi"), and internal_ip (Pass 2) moves with the lease.
+    local _my_machine_id="" _s0
+    [ -r /etc/machine-id ] && _my_machine_id="$(cat /etc/machine-id 2>/dev/null)"
+    if [ -n "${_my_machine_id}" ]; then
+        for _s0 in "${SERVER_LIST[@]}"; do
+            declare -n _srv="SERVER_${_s0}"
+            if [ -n "${_srv[machine_id]}" ] \
+               && [ "${_srv[machine_id]}" = "${_my_machine_id}" ]; then
+                DETECTED_SERVER="${_s0}"
+                DETECTED_IP="${_local_ips[0]:-}"
+                unset -n _srv
+                return 0
+            fi
+            unset -n _srv
+        done
+    fi
+
+    # ── Pass 1: hostname match for any server that declares one ──
+    # Not gated on server_remote: a NAT'd remote box can never match Pass 3
+    # (it only ever sees its private address and the sshd port, never the
+    # forwarded ip:port), so hostname is its only non-IP handle.
     local _sname
     for _sname in "${SERVER_LIST[@]}"; do
         declare -n _srv="SERVER_${_sname}"
-        if [ "${_srv[server_remote]}" != "true" ] \
-           && [ -n "${_srv[hostname]}" ] \
+        if [ -n "${_srv[hostname]}" ] \
            && [ "${_srv[hostname]}" = "${_my_hostname}" ]; then
             DETECTED_SERVER="${_sname}"
             DETECTED_IP="${_local_ips[0]:-}"
@@ -529,11 +701,33 @@ detect_local_server() {
         unset -n _srv
     done
 
-    # ── Pass 2: IP pattern match for server_remote=true servers ──
+    # ── Pass 2: internal_ip exact match (servers behind a port-forward) ──
+    # A NAT'd machine cannot see the ip:port the outside reaches it on — it sees
+    # its own internal address and the sshd port (22), so Pass 3 never matches.
+    # internal_ip is that self-view. It holds a whitespace-separated list, since
+    # one machine can sit on two networks (a Pi answers on both its wired 10.0.x
+    # and its wireless 192.168.x address) and either one may be the live path.
+    local _li _ci
+    for _sname in "${SERVER_LIST[@]}"; do
+        declare -n _srv="SERVER_${_sname}"
+        for _ci in ${_srv[internal_ip]}; do
+            for _li in "${_local_ips[@]}"; do
+                if [ "${_ci}" = "${_li}" ]; then
+                    DETECTED_SERVER="${_sname}"
+                    DETECTED_IP="${_li}"
+                    unset -n _srv
+                    return 0
+                fi
+            done
+        done
+        unset -n _srv
+    done
+
+    # ── Pass 3: IP pattern match for server_remote=true servers ──
     local _best_sig=-1
     local _best_sname=""
     local _best_ip=""
-    local _li _sig
+    local _sig
     for _sname in "${SERVER_LIST[@]}"; do
         declare -n _srv="SERVER_${_sname}"
         [ "${_srv[server_remote]}" != "true" ] && { unset -n _srv; continue; }

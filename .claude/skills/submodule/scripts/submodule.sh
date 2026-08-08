@@ -34,7 +34,7 @@
 #    6. git add {path}
 #
 #  After either action, run {project}_push_all to commit changes.
-#  Remote servers: exec/git.sh -a clone -p {project} -t all -f
+#  Remote servers: core/git/git.sh -a clone -p {project} -t all -f
 #
 #  Requires:
 #    - "base_{PROJECT_USER}" docker container for chown
@@ -42,7 +42,7 @@
 # ============================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-eval "$(python3 "${SCRIPT_DIR}/exec.py" "$(cd "${SCRIPT_DIR}/../../../.." && pwd)/md_files/worklog/users.yaml" "sonny")"
+eval "$(python3 "${SCRIPT_DIR}/exec.py" "$(cd "${SCRIPT_DIR}/../../../.." && pwd)/md_files/users/users.yaml" "sonny")"
 source "${SCRIPT_DIR}/utils.sh"
 
 _show_help() { sed -n '2,/^# ====.*$/p' "$0" | sed 's/^# \?//'; exit 0; }
@@ -115,17 +115,17 @@ fi
 
 # Ensure base container for chown
 detect_local_server || { echo "[ERROR] Could not detect current server"; exit 1; }
-ensure_base "${DETECTED_SERVER}" "${SCRIPT_DIR}" || exit 1
+ensure_base "${DETECTED_SERVER}" || exit 1
 
 # chown project so host user can write
 echo "[chown] ${PARENT}"
 docker exec ${BASE_CONTAINER} chown -R "$(id -u):$(id -g)" "${DOCKER_PROJECT}"
 
-# ── init: false → true ──────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+# ACTION: init — convert regular files to a git submodule (with backup)
+# ═══════════════════════════════════════════════════════════════════
 if [ "${ACTION}" = "init" ]; then
-    echo "=================================="
-    echo "[submodule init] ${TARGET_SUB} (${PARENT})"
-    echo "=================================="
+    print_banner_line "[submodule init] ${TARGET_SUB} (${PARENT})"
 
     # Check: files must exist at submodule path
     if [ ! -d "${FULL_SUB_PATH}" ]; then
@@ -140,12 +140,23 @@ if [ "${ACTION}" = "init" ]; then
         exit 1
     fi
 
-    # Step 1: Backup to reference_codes
+    # Step 1: Backup to reference_codes. The backup MUST be verified before the
+    # destructive steps below (git rm --cached + rm -rf) — a partial copy that
+    # slipped through here used to mean silent data loss at step 4.
     echo "  [backup] ${SUB_PATH} → reference_codes/${TARGET_SUB}/"
-    mkdir -p "${REF_DIR}"
+    # A REF_DIR here can only be the leftover of a previously FAILED init (a
+    # completed one is blocked above by the .gitmodules check) — refresh it, or
+    # stale files merge into the new backup and resurface at restore.
+    [ -d "${REF_DIR}" ] && { echo "  [backup] stale ${REF_DIR} from a failed prior run — refreshing"; rm -rf "${REF_DIR}"; }
+    mkdir -p "${REF_DIR}" || { echo "[ERROR] backup dir creation failed: ${REF_DIR}"; exit 1; }
     # Use cp -a to preserve permissions and structure
-    cp -a "${FULL_SUB_PATH}/." "${REF_DIR}/"
+    cp -a "${FULL_SUB_PATH}/." "${REF_DIR}/" || { echo "[ERROR] backup copy failed — nothing was removed, aborting"; exit 1; }
     _file_count=$(find "${REF_DIR}" -type f | wc -l)
+    _src_count=$(find "${FULL_SUB_PATH}" -type f | wc -l)
+    if [ "${_file_count}" -ne "${_src_count}" ]; then
+        echo "[ERROR] backup incomplete (${_file_count}/${_src_count} files) — nothing was removed, aborting"
+        exit 1
+    fi
     echo "  [backup] ${_file_count} files copied"
 
     # Step 2: Create restore metadata .md
@@ -171,7 +182,7 @@ To restore these files (submodule → regular files):
 ${PARENT}_${TARGET_SUB}_sub_deinit
 
 # Option 2: via exec script
-exec/submodule.sh -a deinit -p ${PARENT} -s ${TARGET_SUB}
+core/submodule/submodule.sh -a deinit -p ${PARENT} -s ${TARGET_SUB}
 \`\`\`
 MDEOF
 
@@ -186,7 +197,7 @@ MDEOF
 
     # Step 5: git submodule add
     echo "  [submodule add] ${SUB_URL} → ${SUB_PATH}"
-    export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
+    export GIT_SSH_COMMAND='ssh -p 22 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
     git submodule add "${SUB_URL}" "${SUB_PATH}"
     if [ $? -ne 0 ]; then
         echo "[ERROR] git submodule add failed"
@@ -200,7 +211,7 @@ MDEOF
 
     # Step 6: Stage reference_codes
     echo "  [git add] reference_codes/"
-    git add "reference_codes/"
+    git add "reference_codes/" || { echo "[ERROR] staging reference_codes/ failed — stage it manually before push"; exit 1; }
 
     cd - > /dev/null
 
@@ -209,15 +220,15 @@ MDEOF
     echo "  Next steps:"
     echo "    ${PARENT}_push_all \"add ${TARGET_SUB} as submodule\""
     echo "    # Remote servers:"
-    echo "    exec/git.sh -a clone -p ${PARENT} -t all -f"
+    echo "    core/git/git.sh -a clone -p ${PARENT} -t all -f"
     exit 0
 fi
 
-# ── deinit: true → false ────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+# ACTION: deinit — convert submodule back to regular files (from backup)
+# ═══════════════════════════════════════════════════════════════════
 if [ "${ACTION}" = "deinit" ]; then
-    echo "=================================="
-    echo "[submodule deinit] ${TARGET_SUB} (${PARENT})"
-    echo "=================================="
+    print_banner_line "[submodule deinit] ${TARGET_SUB} (${PARENT})"
 
     # Check: must be a submodule
     if [ ! -f "${PROJECT_PATH}/.gitmodules" ] || ! grep -q "path = ${SUB_PATH}" "${PROJECT_PATH}/.gitmodules" 2>/dev/null; then
@@ -236,6 +247,47 @@ if [ "${ACTION}" = "deinit" ]; then
         exit 1
     fi
 
+    # Check: nothing in the submodule may be lost. deinit runs `git rm -f` and
+    # `rm -rf .git/modules/<sub>`, which destroys unpushed commits, uncommitted
+    # edits and untracked files with no warning — and the submodule's own repo is
+    # the ONLY copy of them. Every state below is a hard stop, not a prompt.
+    _sub_abs="${PROJECT_PATH}/${SUB_PATH}"
+    _blockers=""
+    if [ -e "${_sub_abs}/.git" ]; then
+        git -C "${_sub_abs}" diff --quiet 2>/dev/null \
+            || _blockers="${_blockers}\n  - uncommitted changes to tracked files"
+        git -C "${_sub_abs}" diff --cached --quiet 2>/dev/null \
+            || _blockers="${_blockers}\n  - staged but uncommitted changes"
+        [ -n "$(git -C "${_sub_abs}" ls-files --others --exclude-standard 2>/dev/null)" ] \
+            && _blockers="${_blockers}\n  - untracked files (never pushed anywhere)"
+        _sub_branch="$(git -C "${_sub_abs}" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+        if git -C "${_sub_abs}" rev-parse --verify -q "origin/${_sub_branch}" >/dev/null 2>&1; then
+            _ahead="$(git -C "${_sub_abs}" rev-list --count "origin/${_sub_branch}..HEAD" 2>/dev/null)"
+            [ "${_ahead:-0}" -gt 0 ] \
+                && _blockers="${_blockers}\n  - ${_ahead} commit(s) ahead of origin/${_sub_branch} (unpushed)"
+        else
+            _blockers="${_blockers}\n  - no origin/${_sub_branch} — this branch was never pushed"
+        fi
+        # The parent's gitlink is what other servers fetch. If it lags the
+        # submodule HEAD, the work is pushed but unreachable from the parent.
+        _recorded="$(git -C "${PROJECT_PATH}" rev-parse "HEAD:${SUB_PATH}" 2>/dev/null)"
+        _actual="$(git -C "${_sub_abs}" rev-parse HEAD 2>/dev/null)"
+        [ -n "${_recorded}" ] && [ "${_recorded}" != "${_actual}" ] \
+            && _blockers="${_blockers}\n  - parent gitlink ${_recorded:0:8} != submodule HEAD ${_actual:0:8} (pointer not committed in the parent)"
+    fi
+    if [ -n "${_blockers}" ]; then
+        echo "[ERROR] '${TARGET_SUB}' has work that deinit would destroy:"
+        printf '%b\n' "${_blockers}"
+        echo ""
+        echo "  Resolve inside the submodule first, then re-run deinit:"
+        echo "    cd ${_sub_abs}"
+        echo "    git status"
+        echo "    git add -A && git commit -m \"...\" && git push"
+        echo "  Then record the pointer in the parent:"
+        echo "    cd ${PROJECT_PATH} && git add ${SUB_PATH} && ${PARENT}_push_all \"bump ${TARGET_SUB}\""
+        exit 1
+    fi
+
     cd "${PROJECT_PATH}" || exit 1
 
     # Step 1: git submodule deinit
@@ -250,11 +302,17 @@ if [ "${ACTION}" = "deinit" ]; then
     echo "  [cleanup] .git/modules/${TARGET_SUB}"
     rm -rf ".git/modules/${TARGET_SUB}"
 
-    # Step 4: Restore from backup
+    # Step 4: Restore from backup. Verified BEFORE step 5 deletes the backup —
+    # an unchecked cp here followed by rm -rf of the backup was a data-loss path.
     echo "  [restore] reference_codes/${TARGET_SUB}/ → ${SUB_PATH}"
-    mkdir -p "${FULL_SUB_PATH}"
-    cp -a "${REF_DIR}/." "${FULL_SUB_PATH}/"
+    mkdir -p "${FULL_SUB_PATH}" || { echo "[ERROR] restore dir creation failed"; exit 1; }
+    cp -a "${REF_DIR}/." "${FULL_SUB_PATH}/" || { echo "[ERROR] restore copy failed — backup kept at ${REF_DIR}"; exit 1; }
     _file_count=$(find "${FULL_SUB_PATH}" -type f | wc -l)
+    _ref_count=$(find "${REF_DIR}" -type f | wc -l)
+    if [ "${_file_count}" -lt "${_ref_count}" ]; then
+        echo "[ERROR] restore incomplete (${_file_count}/${_ref_count} files) — backup kept at ${REF_DIR}"
+        exit 1
+    fi
     echo "  [restore] ${_file_count} files restored"
 
     # Step 5: Remove backup
@@ -266,7 +324,7 @@ if [ "${ACTION}" = "deinit" ]; then
 
     # Step 6: Stage restored files
     echo "  [git add] ${SUB_PATH}"
-    git add "${SUB_PATH}"
+    git add "${SUB_PATH}" || { echo "[ERROR] staging restored ${SUB_PATH} failed — stage it manually before push"; exit 1; }
     # Stage reference_codes removal
     git add -A "reference_codes/" 2>/dev/null
 
@@ -277,6 +335,6 @@ if [ "${ACTION}" = "deinit" ]; then
     echo "  Next steps:"
     echo "    ${PARENT}_push_all \"remove ${TARGET_SUB} submodule, restore as regular files\""
     echo "    # Remote servers:"
-    echo "    exec/git.sh -a clone -p ${PARENT} -t all -f"
+    echo "    core/git/git.sh -a clone -p ${PARENT} -t all -f"
     exit 0
 fi
