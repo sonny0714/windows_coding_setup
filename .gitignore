@@ -6,3 +6,6 @@ md_files/
 
 # Worklog (per-user, machine-specific)
 md_files/users/users.yaml
+
+# Claude Code workspace (generated per server by alias setup.sh)
+.claude/
